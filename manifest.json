@@ -1,0 +1,43 @@
+{
+  "id": "/",
+  "name": "PreçoCerto Brasil - Comparador de preços",
+  "short_name": "PreçoCerto",
+  "description": "Compare preços na Amazon, Mercado Livre, Shopee, Shein, Temu e AliExpress e vá direto à loja com o menor preço que encontramos. Sem cadastro.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f6f7f9",
+  "theme_color": "#ffffff",
+  "categories": ["shopping"],
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Cupons com validade",
+      "short_name": "Cupons",
+      "description": "Ver os cupons que estão no prazo",
+      "url": "/cupons",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}
