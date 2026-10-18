@@ -1,0 +1,13 @@
+[
+  {
+    "storeId": "shopee",
+    "code": "EXEMPLO10",
+    "discountText": "R$ 10 OFF",
+    "minSpendText": "Em compras acima de R$ 99",
+    "description": "EXEMPLO: troque pelos dados reais de um cupom que você testou.",
+    "isExclusiveApp": false,
+    "url": "https://shopee.com.br",
+    "expiresAt": "2030-12-31T23:59:00-03:00",
+    "verifiedAt": "2030-12-01T10:00:00-03:00"
+  }
+]
