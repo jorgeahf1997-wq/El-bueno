@@ -1,0 +1,32 @@
+# Render Blueprint: crea el servicio web de PreçoCerto Brasil con un clic (Render > New > Blueprint).
+# Las claves NO van en este archivo: Render te pide SERPAPI_API_KEY al crear el servicio y la guarda en su panel.
+services:
+  - type: web
+    name: precocerto-brasil
+    runtime: node
+    # 0.5 CPU / 512 MB, siempre encendido (US$ 7/mes). El plan gratuito se duerme tras 15 minutos sin visitas
+    # y Render no lo recomienda para producción; además se perderían las cachés y el contador diario de SerpApi.
+    plan: 0.5c-512mb
+    # Render no tiene región en Brasil; Virginia es la más cercana de las disponibles.
+    region: virginia
+    # --include=dev: tsx y vite (para compilar) son devDependencies y NODE_ENV=production las omitiría.
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/config
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: SERPAPI_API_KEY
+        sync: false
+      # Segunda clave de SerpApi (opcional): añade SERPAPI_API_KEY_2 después en Render > Environment.
+      - key: SERPAPI_DAILY_BUDGET
+        value: "30"
+      - key: SERPAPI_IMMERSIVE_LOOKUPS
+        value: "3"
+      - key: LIVE_DEALS_TTL_MINUTES
+        value: "1440"
+      - key: WHATSAPP_ALERTS_ENABLED
+        value: "false"

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>PreçoCerto Brasil - Comparador de preços das maiores lojas</title>
+    <meta name="description" content="Compare preços na Amazon, Mercado Livre, Shopee, Shein, Temu e AliExpress e vá direto à loja com o menor preço que encontramos. Sem cadastro." />
+
+    <!-- Theme: applied before the first paint so dark mode never flashes white. -->
+    <script>
+      (function () {
+        var saved = null;
+        try { saved = localStorage.getItem('pc_theme'); } catch (e) {}
+        var dark = saved === 'dark' || (saved !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      })();
+    </script>
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#131a27" media="(prefers-color-scheme: dark)" />
+
+    <!-- The server replaces the next tags with the real public address of the site (canonical, Open Graph, Twitter, JSON-LD). -->
+    <link rel="canonical" href="/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="/" />
+    <meta property="og:title" content="PreçoCerto Brasil - Comparador de preços das maiores lojas" />
+    <meta property="og:description" content="Compare preços na Amazon, Mercado Livre, Shopee, Shein, Temu e AliExpress e vá direto à loja com o menor preço que encontramos. Sem cadastro." />
+    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image:secure_url" content="/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="PreçoCerto Brasil: compare preços nas maiores lojas do Brasil" />
+    <meta property="og:site_name" content="PreçoCerto Brasil" />
+    <meta property="og:locale" content="pt_BR" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="/" />
+    <meta name="twitter:title" content="PreçoCerto Brasil - Comparador de preços das maiores lojas" />
+    <meta name="twitter:description" content="Compare preços na Amazon, Mercado Livre, Shopee, Shein, Temu e AliExpress e vá direto à loja com o menor preço que encontramos. Sem cadastro." />
+    <meta name="twitter:image" content="/og-image.png" />
+    <meta name="twitter:image:alt" content="PreçoCerto Brasil: compare preços nas maiores lojas do Brasil" />
+    <script type="application/ld+json" id="ld-json">{}</script>
+
+    <!-- Icons & PWA -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="PreçoCerto" />
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root">
+      <!-- Plain HTML for crawlers and slow connections. React replaces it as soon as the app loads. -->
+      <header style="max-width: 1200px; margin: 0 auto; padding: 24px 16px; font-family: Inter, system-ui, sans-serif; line-height: 1.5;">
+        <h1 style="font-size: 26px; font-weight: 800; margin: 0 0 8px;">PreçoCerto Brasil - Comparador de preços das maiores lojas</h1>
+        <p style="margin: 0 0 20px;">
+          Compare preços na Amazon, Mercado Livre, Shopee, Shein, Temu e AliExpress e vá direto à loja. Os preços vêm do Google Shopping e das lojas e podem mudar: confirme sempre na página da loja. Não precisa de cadastro.
+        </p>
+        <nav aria-label="Categorias">
+          <h2 style="font-size: 18px; font-weight: 700; margin: 0 0 8px;">Categorias</h2>
+          <ul style="display: flex; flex-wrap: wrap; gap: 8px 18px; list-style: none; padding: 0; margin: 0;">
+            <li><a href="/categoria/celulares">Celulares</a></li>
+            <li><a href="/categoria/audio">Áudio e fones</a></li>
+            <li><a href="/categoria/games">Games</a></li>
+            <li><a href="/categoria/relogios">Relógios</a></li>
+            <li><a href="/categoria/cozinha">Casa e cozinha</a></li>
+            <li><a href="/categoria/tenis">Tênis</a></li>
+            <li><a href="/categoria/roupas">Roupas</a></li>
+            <li><a href="/categoria/beleza">Beleza</a></li>
+            <li><a href="/categoria/esportes">Esportes</a></li>
+            <li><a href="/cupons">Cupons</a></li>
+          </ul>
+        </nav>
+        <noscript><p>Ative o JavaScript no navegador para comparar preços.</p></noscript>
+      </header>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
