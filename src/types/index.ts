@@ -5,7 +5,6 @@ export type StoreId =
   | 'shein' 
   | 'temu' 
   | 'aliexpress' 
-  | 'magalu'
   | 'outras';
 
 export interface StoreMetadata {

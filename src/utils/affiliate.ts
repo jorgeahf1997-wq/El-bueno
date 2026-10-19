@@ -8,7 +8,6 @@ export const DEFAULT_AFFILIATE_TAGS: Record<StoreId, string> = {
   temu: '2127307378',
   aliexpress: 'JorgeAHF',
   mercadolivre: 'jh20260503160333',
-  magalu: 'jorgeahf',
   outras: ''
 };
 
@@ -96,18 +95,6 @@ export const STORES_METADATA: Record<StoreId, StoreMetadata> = {
     affiliateParamName: '',
     defaultAffiliateTag: '',
     domainUrl: ''
-  },
-  magalu: {
-    id: 'magalu',
-    name: 'Magazine Luiza',
-    badgeBg: 'bg-[#0086FF]/10',
-    badgeTextColor: 'text-[#0086FF]',
-    borderColor: 'border-[#0086FF]/30',
-    logoIcon: '🏪',
-    primaryColor: '#0086FF',
-    affiliateParamName: 'seller_id',
-    defaultAffiliateTag: DEFAULT_AFFILIATE_TAGS.magalu,
-    domainUrl: 'https://www.magazineluiza.com.br'
   }
 };
 
@@ -122,7 +109,6 @@ export function detectStoreFromUrl(url: string): StoreId {
   if (lower.includes('shein.')) return 'shein';
   if (lower.includes('temu.')) return 'temu';
   if (lower.includes('aliexpress.') || lower.includes('alibab')) return 'aliexpress';
-  if (lower.includes('magazineluiza.') || lower.includes('magalu.')) return 'magalu';
   return 'outras';
 }
 
@@ -171,8 +157,6 @@ export function getDirectStoreSearchUrl(storeId: StoreId, productTitle: string):
       return `https://www.temu.com/br/search_result.html?search_key=${encoded}`;
     case 'aliexpress':
       return `https://pt.aliexpress.com/wholesale?SearchText=${encoded}`;
-    case 'magalu':
-      return `https://www.magazineluiza.com.br/busca/${encoded}`;
     default:
       return `https://www.google.com/search?q=${encoded}`;
   }

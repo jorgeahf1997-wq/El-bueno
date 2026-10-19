@@ -60,13 +60,13 @@ WHATSAPP_ALERTS_ENABLED=false
 PUBLIC_URL=
 CONTACT_EMAIL=
 
-# IDs de afiliado (se não definir, valem os do código)
-AFFILIATE_AMAZON=
-AFFILIATE_MERCADOLIVRE=
-AFFILIATE_SHOPEE=
-AFFILIATE_SHEIN=
-AFFILIATE_TEMU=
-AFFILIATE_ALIEXPRESS=`;
+# IDs de afiliado (já configurados e ativos)
+AFFILIATE_AMAZON=jorgeahf-20
+AFFILIATE_MERCADOLIVRE=jh20260503160333
+AFFILIATE_SHOPEE=an_18399541262
+AFFILIATE_SHEIN=6310987385
+AFFILIATE_TEMU=2127307378
+AFFILIATE_ALIEXPRESS=JorgeAHF`;
 
 const sectionTitle = 'text-sm font-bold text-slate-900 font-sans tracking-normal';
 const smallButton =
@@ -315,9 +315,8 @@ export const ApiConfigModal: React.FC<ApiConfigModalProps> = ({ onClose }) => {
                 );
               })}
             </ul>
-            <p className="mt-3 text-[11px] text-slate-500">
-              Para trocar um ID para todos os visitantes, edite a variável AFFILIATE_* no .env (ou o valor padrão em
-              src/utils/affiliate.ts) e reinicie o servidor.
+            <p className="mt-3 text-[11px] text-save-dark font-medium bg-save-soft rounded-lg px-3 py-2 border border-save/20">
+              ✓ Todos os IDs de afiliados já estão incorporados e funcionando automaticamente. Não é necessário preencher nada.
             </p>
           </section>
 

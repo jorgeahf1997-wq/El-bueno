@@ -12,7 +12,7 @@ interface AddProductModalProps {
   onAddProduct: (product: Product) => void;
 }
 
-const STORE_CHOICES: StoreId[] = ['mercadolivre', 'amazon', 'shopee', 'shein', 'temu', 'aliexpress', 'magalu', 'outras'];
+const STORE_CHOICES: StoreId[] = ['mercadolivre', 'amazon', 'shopee', 'shein', 'temu', 'aliexpress', 'outras'];
 
 const inputClass =
   'w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-surface text-sm text-slate-900 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20';
