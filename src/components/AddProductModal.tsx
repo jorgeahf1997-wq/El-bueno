@@ -12,7 +12,8 @@ interface AddProductModalProps {
   onAddProduct: (product: Product) => void;
 }
 
-const STORE_CHOICES: StoreId[] = ['mercadolivre', 'amazon', 'shopee', 'shein', 'temu', 'aliexpress', 'outras'];
+// The app compares only these six stores.
+const STORE_CHOICES: StoreId[] = ['mercadolivre', 'amazon', 'shopee', 'shein', 'temu', 'aliexpress'];
 
 const inputClass =
   'w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-surface text-sm text-slate-900 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20';
@@ -36,7 +37,11 @@ export const AddProductModal: React.FC<AddProductModalProps> = ({ isOpen, onClos
 
   const handleUrlChange = (url: string) => {
     setProductUrl(url);
-    if (url.trim().startsWith('http')) setStoreId(detectStoreFromUrl(url));
+    if (url.trim().startsWith('http')) {
+      // Short links (amzn.to, meli.la...) are not recognised: then the store already chosen stays.
+      const detected = detectStoreFromUrl(url);
+      if (STORE_CHOICES.includes(detected)) setStoreId(detected);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {

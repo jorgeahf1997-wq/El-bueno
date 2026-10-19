@@ -406,6 +406,11 @@ function buildAffiliateUrl(storeId: string, originalUrl: string): string {
 // -------------------------------------------------------------
 const COMPARED_STORES = ['mercadolivre', 'amazon', 'shopee', 'shein', 'aliexpress', 'temu'];
 
+// The app compares exactly these six stores: they are the ones that can pay the owner a commission. Google Shopping also
+// lists other sellers (Magazine Luiza, Americanas...): their offers carry no affiliate ID, so they are dropped, and a
+// product without a price from one of the six is not listed. SHOW_OTHER_STORES=true brings the other sellers back.
+const SHOW_OTHER_STORES = ['true', '1', 'yes', 'on'].includes((process.env.SHOW_OTHER_STORES || '').trim().toLowerCase());
+
 // Amazon's Associates policy (Participation Requirements, "Displaying prices and availability") only lets a site show
 // an Amazon price that comes from Amazon's own API or from a link Amazon serves. The prices that reach this server
 // come from Google Shopping, so showing them is a risk for the Associates account. The owner decided (17/10/2026) to
@@ -534,6 +539,8 @@ function finalizeOffers(priced: any[], title: string, directUrlMap: Record<strin
   const urls = { ...directUrlMap };
   for (const o of priced) {
     if (!(o.price > 0)) continue;
+    // A store outside the six has no affiliate ID here: it neither appears nor sets the "lowest price".
+    if (!SHOW_OTHER_STORES && !COMPARED_STORES.includes(o.storeId)) continue;
     if (o.storeId === 'amazon' && !AMAZON_SHOW_PRICES) {
       // No Amazon price, but the link stays: it carries the affiliate tag.
       if (!urls.amazon && o.url) urls.amazon = o.url;
@@ -989,6 +996,9 @@ async function fetchSerpApiWithRetry(
 
 // 2. Shopping search. Only real SerpApi / Supabase data is returned. If nothing real is available, the list is empty.
 const searchLimiter = rateLimit(12, 60 * 1000);
+// How many Google results are read per search and how many products are shown (only the six stores' offers survive).
+const MAX_RESULTS_READ = 40;
+const MAX_RESULTS_SHOWN = 8;
 // "Atualizar" never bypasses a cache entry younger than this (protects the API quota).
 const MIN_FORCE_REFRESH_GAP_MS = 10 * 60 * 1000;
 const MIN_LIVE_DEALS_REFRESH_GAP_MS = 30 * 60 * 1000;
@@ -1029,7 +1039,10 @@ app.get('/api/search', searchLimiter, async (req, res) => {
     retryCount = serpResult.retryAttempts;
     errorNotice = serpResult.errorWarning;
 
-    const topItems = (Array.isArray(serpResult.items) ? serpResult.items : []).slice(0, 8);
+    const allItems: any[] = Array.isArray(serpResult.items) ? serpResult.items : [];
+    // Google lists many stores and only the six compared ones are kept, so more results are read than shown. Building a
+    // product costs nothing: credits are only spent on the lookups below, which stay limited to the first 8 results.
+    const topItems = allItems.slice(0, 8);
     // Immersive lookups cost one SerpApi credit each: only the first results that support them get one,
     // and only while the daily budget lasts. A credit is counted only when a lookup is really made.
     let lookupsLeft = SERPAPI_IMMERSIVE_LOOKUPS;
@@ -1043,13 +1056,15 @@ app.get('/api/search', searchLimiter, async (req, res) => {
       })
     );
 
-    products = topItems
-      .map((item: any, idx: number) => buildProductFromSerp(item, storesList[idx] || [], undefined, query))
-      .filter(Boolean);
+    // Build first and cut afterwards: a result with no price from one of the six stores must not use up a place.
+    products = [
+      ...topItems.map((item: any, idx: number) => buildProductFromSerp(item, storesList[idx] || [], undefined, query)),
+      ...allItems.slice(8, MAX_RESULTS_READ).map((item: any) => buildProductFromSerp(item, [], undefined, query))
+    ].filter(Boolean);
 
     // Same product can come back twice; keep the first.
     const seen = new Set<string>();
-    products = products.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)));
+    products = products.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true))).slice(0, MAX_RESULTS_SHOWN);
     // Keep Google's relevance order: the client sorts by price when the visitor asks for it.
   }
 

@@ -169,7 +169,7 @@ export const AdvancedFilters: React.FC<AdvancedFiltersProps> = ({ filters, onFil
                   onChange={(e) => onFilterChange({ nationalOnly: e.target.checked })}
                   className="w-4 h-4 rounded"
                 />
-                Só lojas com envio nacional (Amazon, Mercado Livre, Magalu)
+                Só lojas com envio nacional (Amazon, Mercado Livre)
               </label>
             </div>
           </fieldset>
