@@ -1,5 +1,6 @@
 import React from 'react';
 import { Product } from '../types';
+import { usePaging } from '../hooks/usePaging';
 import { hasPrice } from '../utils/offers';
 import { ProductCard } from './ProductCard';
 
@@ -10,9 +11,18 @@ interface HighlightsSectionProps {
   onRetry: () => void;
 }
 
-/** Home carousel built only from products that have a real price. */
+/** Offers shown the first time, and each time "Ver mais ofertas" is pressed. */
+export const HIGHLIGHTS_PAGE = 10;
+
+const GRID = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3';
+
+/** Home offers: a grid (not a strip to scroll sideways) built only from products that have a real price. */
 export const HighlightsSection: React.FC<HighlightsSectionProps> = ({ products, status, onOpenProduct, onRetry }) => {
-  const items = products.filter((p) => hasPrice(p.lowestOffer) || p.offers.some(hasPrice));
+  const items = React.useMemo(
+    () => products.filter((p) => hasPrice(p.lowestOffer) || p.offers.some(hasPrice)),
+    [products]
+  );
+  const paging = usePaging(items, HIGHLIGHTS_PAGE);
 
   return (
     <section className="mb-8" aria-labelledby="destaques-title">
@@ -26,9 +36,9 @@ export const HighlightsSection: React.FC<HighlightsSectionProps> = ({ products, 
       </div>
 
       {status === 'loading' && items.length === 0 && (
-        <div className="flex gap-3 overflow-hidden" aria-hidden="true">
+        <div className={GRID} aria-hidden="true">
           {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="w-[156px] sm:w-[176px] shrink-0 bg-surface rounded-2xl border border-slate-200 p-3">
+            <div key={i} className="bg-surface rounded-2xl border border-slate-200 p-3">
               <div className="skeleton aspect-square mb-2.5" />
               <div className="skeleton h-3.5 w-full mb-1.5" />
               <div className="skeleton h-3.5 w-2/3 mb-3" />
@@ -53,11 +63,24 @@ export const HighlightsSection: React.FC<HighlightsSectionProps> = ({ products, 
       )}
 
       {items.length > 0 && (
-        <div className="flex items-stretch gap-3 overflow-x-auto no-scrollbar snap-x -mx-1 px-1 py-1">
-          {items.map((p) => (
-            <ProductCard key={p.id} product={p} onOpen={onOpenProduct} variant="compact" />
-          ))}
-        </div>
+        <>
+          <div className={GRID} data-testid="highlights-grid">
+            {paging.visible.map((p) => (
+              <ProductCard key={p.id} product={p} onOpen={onOpenProduct} variant="compact" fluid />
+            ))}
+          </div>
+          {paging.hasMore && (
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={paging.showMore}
+                className="px-5 py-2.5 rounded-xl border border-slate-300 bg-surface text-sm font-bold text-slate-800 hover:bg-slate-50"
+              >
+                Ver mais ofertas ({paging.remaining})
+              </button>
+            </div>
+          )}
+        </>
       )}
     </section>
   );
