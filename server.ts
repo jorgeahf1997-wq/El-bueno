@@ -97,6 +97,54 @@ function cleanProductTitle(rawTitle: string): string {
     .trim();
 }
 
+// A title made only of colour, size and count words ("Branco 36", "Preto M", "Kit 3") says nothing about the product, so
+// that result is not listed. Any other word (a brand, a model, a type of product) makes the title meaningful.
+const FILLER_WORDS = new Set([
+  'preto', 'preta', 'branco', 'branca', 'azul', 'vermelho', 'vermelha', 'verde', 'rosa', 'cinza', 'amarelo', 'amarela',
+  'marrom', 'bege', 'roxo', 'roxa', 'laranja', 'dourado', 'dourada', 'prata', 'prateado', 'prateada', 'nude', 'marinho',
+  'grafite', 'tamanho', 'tam', 'cor', 'kit', 'un', 'und', 'unidade', 'unidades', 'par', 'pares', 'pcs', 'pp', 'gg', 'xg',
+  'xxg', 'de', 'da', 'do', 'das', 'dos', 'com', 'sem', 'para', 'em'
+]);
+function isMeaninglessTitle(title: string): boolean {
+  const words = title.toLowerCase().split(/[^a-z0-9À-ÿ]+/).filter(Boolean);
+  return !words.some((w) => w.length >= 2 && /[a-zÀ-ÿ]/.test(w) && !FILLER_WORDS.has(w));
+}
+
+// Accessories that Google lists next to the product that was searched ("Capa para iPhone 15" when the search is "iphone 15").
+// They are not what the visitor asked for and, once the list is sorted by price, they would crowd out the real offers. A title
+// is hidden only when it STARTS with an accessory noun that the search did not use AND it names the searched product: after a
+// link word ("para", "de", "compatível com") for nouns that can also be a product, or anywhere for covers and screen films.
+// "Tênis para corrida" stays, and so does a power bank sold as "Carregador portátil" when the search was "power bank".
+const plainText = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const plainWords = (s: string) => plainText(s).split(/[^a-z0-9]+/).filter(Boolean);
+const stemOf = (w: string) => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w);
+const ACCESSORY_STRONG = new Set(['capa', 'capas', 'capinha', 'capinhas', 'pelicula', 'peliculas']);
+const ACCESSORY_WEAK = new Set([
+  'carregador', 'carregadores', 'cabo', 'cabos', 'adaptador', 'adaptadores', 'fonte', 'fontes', 'bateria', 'baterias',
+  'suporte', 'suportes', 'pulseira', 'pulseiras', 'protetor', 'protetores', 'case', 'cases', 'refil', 'refis', 'forro',
+  'forros', 'papel'
+]);
+const ACCESSORY_LINKS = new Set(['para', 'pra', 'p', 'de', 'do', 'da', 'compativel', 'for']);
+function looksLikeAccessory(title: string, query: string): boolean {
+  const t = plainWords(title);
+  const q = plainWords(query).filter((w) => w.length >= 2 && /[a-z]/.test(w) && !FILLER_WORDS.has(w));
+  if (q.length === 0) return false;
+  // The first word that says something: "Kit 3 Capas ..." starts with "capas".
+  const lead = t.findIndex((w) => !FILLER_WORDS.has(w) && !/^\d+$/.test(w));
+  if (lead < 0) return false;
+  const noun = t[lead];
+  const strong = ACCESSORY_STRONG.has(noun);
+  if (!strong && !ACCESSORY_WEAK.has(noun)) return false;
+  const asked = (w: string) => q.some((x) => x === w || stemOf(x) === stemOf(w));
+  if (asked(noun)) return false; // the search asked for it ("capa de sofá")
+  const rest = t.slice(lead + 1);
+  if (strong) return rest.some(asked);
+  for (let i = 0; i < rest.length; i++) {
+    if (ACCESSORY_LINKS.has(rest[i]) && rest.slice(i + 1, i + 5).some(asked)) return true;
+  }
+  return false;
+}
+
 // Function to extract clean numeric price handling comma/point inconsistencies (Screenshot 3)
 function extractCleanPrice(rawPrice: any): number {
   if (typeof rawPrice === 'number' && !isNaN(rawPrice)) return rawPrice;
@@ -575,7 +623,12 @@ function buildProductFromSerp(item: any, itemStores: any[], category?: string, f
   const price = extractCleanPrice(item.extracted_price ?? item.price);
   if (!(price > 0)) return null;
   const title = cleanProductTitle(item.title || fallbackTitle);
-  if (!title) return null;
+  if (!title || isMeaninglessTitle(title)) return null;
+  // fallbackTitle is the search (or the home seed): a cover or a cable for the product searched is not that product.
+  if (looksLikeAccessory(title, fallbackTitle)) {
+    searchStats.hiddenAccessories++;
+    return null;
+  }
 
   const productLink = item.product_link || item.link || '';
   const directUrlMap: Record<string, string> = {};
@@ -638,6 +691,42 @@ function buildProductFromSerp(item: any, itemStores: any[], category?: string, f
     checkedAt: Date.now(),
     priceHistory: [] as any[]
   } as any;
+}
+
+// The same product (same Google id or same title) can come back twice, with offers from different stores or in two pages of the
+// same search. Its offers are combined (the cheapest one of each store), so "keep the first" never throws away a lower price.
+function combineProducts(a: any, b: any): any {
+  const all = [...(a.offers || []), ...(b.offers || [])];
+  const priced = all.filter((o) => o.priceKnown !== false && o.price > 0).map((o) => ({ ...o, isBestPrice: false }));
+  // The pages each store really gave, for the stores that end up with a link and no price.
+  const urls: Record<string, string> = {};
+  for (const o of all) {
+    if (o.url && COMPARED_STORES.includes(o.storeId) && !urls[o.storeId] && landsOnStore(o.storeId, o.url)) urls[o.storeId] = o.url;
+  }
+  const offers = finalizeOffers(priced, a.title, urls);
+  landOffersOnTheirStore(offers, priced, urls, a.title);
+  const best = offers.find((o: any) => o.priceKnown !== false);
+  if (!best) return a;
+  return {
+    ...a,
+    offers,
+    lowestOffer: best,
+    affiliate_url: best.affiliateUrl,
+    rating: a.rating > 0 ? a.rating : b.rating > 0 ? b.rating : 0,
+    reviewsCount: Math.max(a.reviewsCount || 0, b.reviewsCount || 0),
+    image: a.image && a.image !== PLACEHOLDER_IMAGE ? a.image : b.image || a.image,
+    checkedAt: Math.max(a.checkedAt || 0, b.checkedAt || 0) || undefined
+  };
+}
+
+// Keeps the order of first appearance (Google's order); a repeated id adds its offers to the product already listed.
+function mergeProductsById(list: any[]): any[] {
+  const byId = new Map<string, any>();
+  for (const p of list) {
+    const prev = byId.get(p.id);
+    byId.set(p.id, prev ? combineProducts(prev, p) : p);
+  }
+  return Array.from(byId.values());
 }
 
 // True only when a lookup can really be made (and so would really cost a credit). The URL must stay on
@@ -893,19 +982,89 @@ app.get('/api/test-affiliates', (req, res) => {
   });
 });
 
+// Owner diagnostics: how many results Google returned and who sells them, plus today's SerpApi credits. Counts only (no
+// search text, nothing about visitors), since the server last started.
+app.get('/api/search-stats', (req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    since: searchStats.since,
+    queries: searchStats.queries,
+    results: searchStats.results,
+    listed: searchStats.listed,
+    sellers: searchStats.sellers,
+    // The same for the extra lists asked to Google when a visitor sorts by price or discount (queries = credits spent on them).
+    extra: searchStats.extra,
+    hiddenAccessories: searchStats.hiddenAccessories,
+    creditsToday: serpSpend.day === today ? serpSpend.used : 0,
+    dailyBudget: SERPAPI_DAILY_BUDGET
+  });
+});
+
 // -------------------------------------------------------------
 // SERPAPI ENGINE WITH EXPONENTIAL BACKOFF & REAL-TIME PARAMS (Screenshots 1, 2, 5)
 // -------------------------------------------------------------
 interface SerpApiFetchResult {
   items: any[];
+  /** Everything Google returned, before the used/defective filter (only for the owner's diagnostics). */
+  raw?: any[];
   retryAttempts: number;
   errorWarning?: string;
   source: 'live' | 'cache' | 'fallback';
 }
 
+// -------------------------------------------------------------
+// OWNER DIAGNOSTICS: who sells the results Google returns. Counts only: no search text and nothing about visitors is
+// kept. Memory only, so it starts again from zero whenever the server restarts.
+// -------------------------------------------------------------
+// What a search asks Google Shopping for. "relevance" is the normal search. The others are the extra lists that make the
+// orders of the results truthful for the whole of Google's list: the same search sorted by price (low to high, high to low)
+// or only with products on sale. They are SerpApi parameters: sort_by (1 = price low to high, 2 = price high to low) and
+// on_sale. Each one costs one credit, only when the visitor picks that order.
+type SearchMode = 'relevance' | 'price_asc' | 'price_desc' | 'discount';
+const SEARCH_MODES: SearchMode[] = ['relevance', 'price_asc', 'price_desc', 'discount'];
+const SEARCH_MODE_PARAMS: Record<SearchMode, Record<string, string>> = {
+  relevance: {},
+  price_asc: { sort_by: '1' },
+  price_desc: { sort_by: '2' },
+  discount: { on_sale: 'true' }
+};
+const parseSearchMode = (value: unknown): SearchMode => {
+  const v = String(value ?? '');
+  return (SEARCH_MODES as string[]).includes(v) ? (v as SearchMode) : 'relevance';
+};
+
+const searchStats = {
+  since: Date.now(),
+  queries: 0,                              // searches made to Google Shopping (search box and home highlights)
+  results: 0,                              // results Google returned
+  listed: 0,                               // products that reached the screen
+  sellers: {} as Record<string, number>,   // results per seller: the six stores, 'magalu' and 'outras'
+  // The same, only for the extra lists (price_asc, price_desc, discount): how many of the results Google sorted came from the six
+  extra: {} as Record<string, { queries: number; results: number; listed: number }>,
+  hiddenAccessories: 0                     // covers, cables... hidden because the search was for the product they fit
+};
+
+function noteGoogleResults(rawItems: any[], listed: number, mode: SearchMode = 'relevance') {
+  searchStats.queries++;
+  searchStats.results += rawItems.length;
+  searchStats.listed += listed;
+  for (const it of rawItems) {
+    const seller = detectStoreId(it?.source || '') || detectStoreId(it?.link || '') || 'outras';
+    searchStats.sellers[seller] = (searchStats.sellers[seller] || 0) + 1;
+  }
+  if (mode !== 'relevance') {
+    const e = searchStats.extra[mode] || (searchStats.extra[mode] = { queries: 0, results: 0, listed: 0 });
+    e.queries++;
+    e.results += rawItems.length;
+    e.listed += listed;
+  }
+}
+
 async function fetchSerpApiWithRetry(
-  query: string, 
-  maxRetries = 3
+  query: string,
+  maxRetries = 3,
+  mode: SearchMode = 'relevance'
 ): Promise<SerpApiFetchResult> {
   if (!hasSerpKeys()) {
     return { items: [], retryAttempts: 0, source: 'fallback', errorWarning: 'No API key configured' };
@@ -922,11 +1081,11 @@ async function fetchSerpApiWithRetry(
       serpUrl.searchParams.set('google_domain', 'google.com.br');
       serpUrl.searchParams.set('gl', 'br');
       serpUrl.searchParams.set('hl', 'pt');
-      
-      // Screenshot 1 & 5: Real-time search parameter (tbs=qdr:d for last 24h or tbs=qdr:n for latest)
-      serpUrl.searchParams.set('tbs', 'qdr:d');
+      // No "tbs" here: qdr:d ("last 24 hours") is a filter of Google's web search, it means nothing for Google Shopping
+      // and, if Google applied it anyway, it could only cut results. The home searches never sent it either.
+      for (const [name, value] of Object.entries(SEARCH_MODE_PARAMS[mode])) serpUrl.searchParams.set(name, value);
 
-      console.log(`[SerpApi] Requesting real-time Google Shopping (attempt ${attempt + 1}/${maxRetries + 1}): "${query}"`);
+      console.log(`[SerpApi] Requesting real-time Google Shopping (attempt ${attempt + 1}/${maxRetries + 1}${mode === 'relevance' ? '' : `, ${mode}`}): "${query}"`);
       const response = await serpFetch(serpUrl, 9000);
       if (!response) {
         return { items: [], retryAttempts: attempt, source: 'fallback', errorWarning: 'Busca ao vivo indisponível no momento.' };
@@ -948,6 +1107,7 @@ async function fetchSerpApiWithRetry(
 
         return {
           items: filtered,
+          raw: rawItems,
           retryAttempts: attempt,
           source: 'live'
         };
@@ -996,158 +1156,320 @@ async function fetchSerpApiWithRetry(
 
 // 2. Shopping search. Only real SerpApi / Supabase data is returned. If nothing real is available, the list is empty.
 const searchLimiter = rateLimit(12, 60 * 1000);
-// How many Google results are read per search and how many products are shown (only the six stores' offers survive).
-const MAX_RESULTS_READ = 40;
-const MAX_RESULTS_SHOWN = 8;
+// How many Google results are read from one page and how many products are sent to the browser. Reading and building cost
+// no credit (a credit is only spent on the lookups below, limited to the first 8 results). Only offers from the six
+// compared stores survive, so the list is usually shorter than what Google returned.
+const MAX_RESULTS_READ = 100;
+const MAX_RESULTS_SHOWN = 60;
 // "Atualizar" never bypasses a cache entry younger than this (protects the API quota).
 const MIN_FORCE_REFRESH_GAP_MS = 10 * 60 * 1000;
 const MIN_LIVE_DEALS_REFRESH_GAP_MS = 30 * 60 * 1000;
+
+// -------------------------------------------------------------
+// THE ORDERS ARE REAL. Google Shopping gives about 40 results per page and no second page, so sorting only the first page
+// would sort the wrong list: the cheapest product of all would not be in it. When the visitor picks "Menor preço", "Maior
+// preço" or "Maior desconto", the server asks Google for that very list (sorted by price, or only what is on sale), adds it
+// to the normal list (same product = one product with the offers of both) and sorts the whole. Each of those lists costs
+// one more credit and is cached on its own. If Google cannot be asked (no credits left, SerpApi down), the answer says so
+// (sortApplied: false) and the browser tells the visitor; it is never presented as if the whole list had been sorted.
+// "Melhor avaliados" and "Mais avaliações" have no list on Google's side: they order what was found.
+// -------------------------------------------------------------
+
+// Two requests for the same list at the same moment (a double tap, two visitors) share one Google request.
+const inflight = new Map<string, Promise<any>>();
+function singleFlight<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const running = inflight.get(key);
+  if (running) return running as Promise<T>;
+  const started = work().finally(() => inflight.delete(key));
+  inflight.set(key, started);
+  return started;
+}
+
+const clockText = (t: number) => `Hoje às ${new Date(t).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}`;
+
+function cacheSearch(key: string, entry: CacheEntry<any[]>) {
+  searchCache.set(key, entry);
+  if (searchCache.size > 500) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest !== undefined) searchCache.delete(oldest);
+  }
+}
+
+interface SearchPage {
+  products: any[];
+  /** true when Google really answered (an empty list counts); false when nothing could be asked or the request failed. */
+  live: boolean;
+  notice?: string;
+  retryAttempts: number;
+}
+
+// One request to Google Shopping = one credit. `mode` picks the list that is asked for (see SEARCH_MODE_PARAMS). The
+// lookups for more stores of one product cost one more credit each and are made only for the normal list.
+async function searchPage(query: string, mode: SearchMode): Promise<SearchPage> {
+  if (!hasSerpKeys()) {
+    return { products: [], live: false, notice: 'Busca ao vivo indisponível no momento.', retryAttempts: 0 };
+  }
+  if (!spendSerp(1)) {
+    return { products: [], live: false, notice: 'Limite diário de buscas ao vivo atingido. Tente novamente amanhã.', retryAttempts: 0 };
+  }
+  const serpResult = await fetchSerpApiWithRetry(query, 1, mode);
+  const allItems: any[] = Array.isArray(serpResult.items) ? serpResult.items : [];
+  // Immersive lookups cost one SerpApi credit each: only the first results that support them get one, and only while
+  // the daily budget lasts. A credit is counted only when a lookup is really made.
+  const topItems = allItems.slice(0, 8);
+  let lookupsLeft = mode === 'relevance' ? SERPAPI_IMMERSIVE_LOOKUPS : 0;
+  const storesList = await Promise.all(
+    topItems.map((it: any) => {
+      if (lookupsLeft > 0 && hasImmersiveApi(it) && spendSerp(1)) {
+        lookupsLeft--;
+        return fetchImmersiveStores(it);
+      }
+      return Promise.resolve([] as any[]);
+    })
+  );
+  // Build first and cut afterwards: a result with no price from one of the six stores must not use up a place.
+  const built = [
+    ...topItems.map((item: any, idx: number) => buildProductFromSerp(item, storesList[idx] || [], undefined, query)),
+    ...allItems.slice(8, MAX_RESULTS_READ).map((item: any) => buildProductFromSerp(item, [], undefined, query))
+  ].filter(Boolean);
+  // The same product can come back twice: its offers are combined instead of keeping only the first.
+  const products = mergeProductsById(built).slice(0, MAX_RESULTS_SHOWN);
+  const live = serpResult.source === 'live';
+  if (live) noteGoogleResults(serpResult.raw || allItems, products.length, mode);
+  return { products, live, notice: serpResult.errorWarning, retryAttempts: serpResult.retryAttempts };
+}
+
+interface Pool {
+  products: any[];
+  cached: boolean;
+  cachedAt: number;
+  expires: number;
+  hasSignificantChange: boolean;
+  priceDrops: PriceDropEvent[];
+  retryAttempts: number;
+  /** Why the list is empty or old, when Google could not answer. */
+  notice?: string;
+  /** true when the list is a cached one or came from a live answer (even an empty one). */
+  ok: boolean;
+  /** true when an older copy is served because the refresh failed. */
+  stale?: boolean;
+}
+
+const STALE_SEARCH_NOTICE = 'Não conseguimos atualizar agora. Mostrando os últimos preços que consultamos.';
+
+const poolFromCache = (entry: CacheEntry<any[]>): Pool => ({
+  products: entry.data,
+  cached: true,
+  cachedAt: entry.cachedAt,
+  expires: entry.expires,
+  hasSignificantChange: Boolean(entry.hasSignificantChange),
+  priceDrops: [],
+  retryAttempts: 0,
+  ok: true
+});
+
+// A cached list is used while it is fresh. A forced refresh ("Atualizar") only bypasses it when it is old enough.
+function usableCache(key: string, wantsRefresh: boolean): CacheEntry<any[]> | null {
+  const entry = searchCache.get(key);
+  if (!entry || entry.expires <= Date.now()) return null;
+  const refreshAllowed = Date.now() - entry.cachedAt >= MIN_FORCE_REFRESH_GAP_MS;
+  return wantsRefresh && refreshAllowed ? null : entry;
+}
+
+// Offers typed by the owner in Supabase ('ofertas_locales') complete thin results.
+async function withCuratedDeals(products: any[], query: string): Promise<any[]> {
+  try {
+    const { data: dbDeals } = await supabaseClient
+      .from('ofertas_locales')
+      .select('*')
+      .ilike('titulo', `%${query.replace(/[%_]/g, ' ')}%`)
+      .limit(6);
+    if (!dbDeals || dbDeals.length === 0) return products;
+    const dbProducts = dbDeals
+      .map((deal: any) => {
+        const price = extractCleanPrice(deal.preco);
+        if (!(price > 0)) return null;
+        const title = cleanProductTitle(deal.titulo || query);
+        const ownUrl = deal.affiliate_url || deal.url_afiliado || deal.link_afiliado || deal.url || '';
+        const storeId = detectStoreId(deal.loja || deal.store || '') || detectStoreId(ownUrl) || 'outras';
+        const offer = makeOffer(`off-db-${deal.id}`, { storeId, storeName: deal.loja || deal.store, price, url: ownUrl || generateStoreProductOfferUrl(storeId, title) });
+        if (ownUrl) {
+          offer.affiliateUrl = ownUrl;
+        }
+        const offers = finalizeOffers([offer], title);
+        const lowest = offers.find((o: any) => o.priceKnown !== false);
+        // With AMAZON_SHOW_PRICES=false a hand-typed Amazon price is hidden too: then there is nothing to list.
+        if (!lowest) return null;
+        return {
+          id: `prod-db-${deal.id}`,
+          title,
+          image: deal.imagem_url || PLACEHOLDER_IMAGE,
+          rating: 0,
+          reviewsCount: 0,
+          offers,
+          lowestOffer: lowest,
+          affiliate_url: ownUrl,
+          // The owner typed this price: show when it was entered, never "just checked".
+          checkedAt: Number.isFinite(new Date(deal.updated_at || deal.created_at || '').getTime())
+            ? new Date(deal.updated_at || deal.created_at).getTime()
+            : undefined,
+          priceHistory: [] as any[]
+        };
+      })
+      .filter(Boolean);
+    const existing = new Set(products.map((p) => p.id));
+    return [...products, ...dbProducts.filter((p: any) => !existing.has(p.id))];
+  } catch (err) {
+    console.warn('[Supabase] Error querying ofertas_locales:', err);
+    return products;
+  }
+}
+
+// The normal list: Google's relevance order.
+function relevancePool(query: string, wantsRefresh: boolean): Promise<Pool> {
+  const key = query.toLowerCase();
+  return singleFlight(`rel\u0001${key}`, async () => {
+    const fresh = usableCache(key, wantsRefresh);
+    if (fresh) return poolFromCache(fresh);
+
+    const page = await searchPage(query, 'relevance');
+    // The refresh failed but an older copy exists: it is better than an empty screen.
+    const old = searchCache.get(key);
+    if (!page.live && page.products.length === 0 && old) {
+      return { ...poolFromCache(old), notice: page.notice || STALE_SEARCH_NOTICE, stale: true };
+    }
+
+    let products = page.products;
+    if (supabaseClient && products.length < 3) products = await withCuratedDeals(products, query);
+    // Only prices the stores really returned count as observations (not the owner's curated prices).
+    recordPrices(products.filter((p) => !String(p.id).startsWith('prod-db-')));
+    attachHistory(products);
+    const { hasSignificantChange, priceDrops } = detectPriceChanges(products);
+    const builtAt = Date.now();
+    if (products.length > 0) {
+      cacheSearch(key, { data: products, expires: builtAt + CACHE_TTL_MS, cachedAt: builtAt, hasSignificantChange });
+    }
+    return {
+      products,
+      cached: false,
+      cachedAt: builtAt,
+      expires: builtAt + CACHE_TTL_MS,
+      hasSignificantChange,
+      priceDrops,
+      retryAttempts: page.retryAttempts,
+      notice: page.notice,
+      ok: page.live || products.length > 0
+    };
+  });
+}
+
+const lowestPriceOf = (p: any): number => {
+  const prices = (p.offers || []).filter((o: any) => o.priceKnown !== false && o.price > 0).map((o: any) => o.price);
+  return prices.length ? Math.min(...prices) : Infinity;
+};
+
+// Discount the source itself reported for the cheapest offer (0 when it reported none): nothing is estimated.
+const reportedDiscountOf = (p: any): number => {
+  const best = (p.offers || []).filter((o: any) => o.priceKnown !== false && o.price > 0).sort((a: any, b: any) => a.price - b.price)[0];
+  return best && best.originalPrice > best.price ? (best.originalPrice - best.price) / best.originalPrice : 0;
+};
+
+// Sorts the whole merged list. Equal values keep the order they had (Google's relevance first).
+function sortForMode(list: any[], mode: SearchMode): any[] {
+  if (mode === 'relevance') return list;
+  const keyed = list.map((p, i) => ({ p, i, price: lowestPriceOf(p), discount: reportedDiscountOf(p) }));
+  keyed.sort((a, b) =>
+    mode === 'price_asc' ? a.price - b.price || a.i - b.i
+    : mode === 'price_desc' ? b.price - a.price || a.i - b.i
+    : b.discount - a.discount || a.i - b.i
+  );
+  return keyed.map((k) => k.p);
+}
+
+function searchResponse(pool: Pool, sort: SearchMode, sortApplied: boolean, extra: Record<string, unknown> = {}) {
+  return {
+    products: pool.products,
+    cached: pool.cached,
+    cacheExpiresInSeconds: pool.cached ? Math.max(0, Math.round((pool.expires - Date.now()) / 1000)) : Math.round(CACHE_TTL_MS / 1000),
+    lastUpdated: clockText(pool.cachedAt),
+    hasSignificantChange: pool.hasSignificantChange,
+    priceDrops: pool.priceDrops,
+    retryAttempts: pool.retryAttempts,
+    sort,
+    sortApplied,
+    // Why there is nothing to show (only when the list is empty) or why the list is old (stale).
+    errorWarning: pool.products.length === 0 ? pool.notice || undefined : undefined,
+    notice: pool.stale ? pool.notice : undefined,
+    ...extra
+  };
+}
+
+// A list sorted for the whole of Google's list: the normal list + the list Google itself sorted, merged and sorted.
+function extraPoolResponse(query: string, mode: SearchMode, wantsRefresh: boolean): Promise<ReturnType<typeof searchResponse>> {
+  const key = `${query.toLowerCase()}\u0001${mode}`;
+  return singleFlight(`ext\u0001${key}`, async () => {
+    const fresh = usableCache(key, wantsRefresh);
+    if (fresh) return searchResponse(poolFromCache(fresh), mode, true);
+
+    const base = await relevancePool(query, wantsRefresh);
+    const page = await searchPage(query, mode);
+
+    if (!page.live) {
+      // Google could not be asked for the sorted list. An older sorted copy is still real; otherwise the visitor gets the
+      // normal list and a clear statement that it was NOT sorted for the whole of Google's list.
+      const old = searchCache.get(key);
+      if (old) return searchResponse({ ...poolFromCache(old), notice: page.notice || STALE_SEARCH_NOTICE, stale: true }, mode, true);
+      return searchResponse(base, mode, false, {
+        sortNotice: page.notice || 'Não foi possível buscar a lista ordenada agora.'
+      });
+    }
+
+    const merged = mergeProductsById([...base.products, ...page.products]).slice(0, MAX_RESULTS_SHOWN * 2);
+    const products = sortForMode(merged, mode);
+    recordPrices(products.filter((p) => !String(p.id).startsWith('prod-db-')));
+    attachHistory(products);
+    const { hasSignificantChange, priceDrops } = detectPriceChanges(products);
+    const builtAt = Date.now();
+    // A list built without the normal list (it failed) is not kept: it would stay incomplete until it expires.
+    if (base.ok && products.length > 0) {
+      cacheSearch(key, { data: products, expires: builtAt + CACHE_TTL_MS, cachedAt: builtAt, hasSignificantChange });
+    }
+    return searchResponse(
+      {
+        products,
+        cached: false,
+        cachedAt: builtAt,
+        expires: builtAt + CACHE_TTL_MS,
+        hasSignificantChange,
+        priceDrops,
+        retryAttempts: base.retryAttempts + page.retryAttempts,
+        notice: page.notice || base.notice,
+        ok: true
+      },
+      mode,
+      true
+    );
+  });
+}
 
 app.get('/api/search', searchLimiter, async (req, res) => {
   const query = String(req.query.q || '').replace(/\s+/g, ' ').trim().slice(0, 100);
   if (!query) {
     return res.json({ products: [] });
   }
-
-  const cacheKey = query.toLowerCase();
-  const cached = searchCache.get(cacheKey);
-  const now = Date.now();
   const wantsRefresh = req.query.refresh === 'true';
-  // A forced refresh only bypasses the cache when the cached copy is old enough.
-  const refreshAllowed = !cached || now - cached.cachedAt >= MIN_FORCE_REFRESH_GAP_MS;
+  const mode = parseSearchMode(req.query.sort);
 
-  if (cached && cached.expires > now && !(wantsRefresh && refreshAllowed)) {
-    return res.json({
-      products: cached.data,
-      cached: true,
-      cacheExpiresInSeconds: Math.max(0, Math.round((cached.expires - now) / 1000)),
-      lastUpdated: `Hoje às ${new Date(cached.cachedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}`,
-      hasSignificantChange: Boolean(cached.hasSignificantChange)
-    });
-  }
-
-  let products: any[] = [];
-  let retryCount = 0;
-  let errorNotice: string | undefined;
-
-  if (!hasSerpKeys()) {
-    errorNotice = 'Busca ao vivo indisponível no momento.';
-  } else if (!spendSerp(1)) {
-    errorNotice = 'Limite diário de buscas ao vivo atingido. Tente novamente amanhã.';
-  } else {
-    const serpResult = await fetchSerpApiWithRetry(query, 1);
-    retryCount = serpResult.retryAttempts;
-    errorNotice = serpResult.errorWarning;
-
-    const allItems: any[] = Array.isArray(serpResult.items) ? serpResult.items : [];
-    // Google lists many stores and only the six compared ones are kept, so more results are read than shown. Building a
-    // product costs nothing: credits are only spent on the lookups below, which stay limited to the first 8 results.
-    const topItems = allItems.slice(0, 8);
-    // Immersive lookups cost one SerpApi credit each: only the first results that support them get one,
-    // and only while the daily budget lasts. A credit is counted only when a lookup is really made.
-    let lookupsLeft = SERPAPI_IMMERSIVE_LOOKUPS;
-    const storesList = await Promise.all(
-      topItems.map((it: any) => {
-        if (lookupsLeft > 0 && hasImmersiveApi(it) && spendSerp(1)) {
-          lookupsLeft--;
-          return fetchImmersiveStores(it);
-        }
-        return Promise.resolve([] as any[]);
-      })
-    );
-
-    // Build first and cut afterwards: a result with no price from one of the six stores must not use up a place.
-    products = [
-      ...topItems.map((item: any, idx: number) => buildProductFromSerp(item, storesList[idx] || [], undefined, query)),
-      ...allItems.slice(8, MAX_RESULTS_READ).map((item: any) => buildProductFromSerp(item, [], undefined, query))
-    ].filter(Boolean);
-
-    // Same product can come back twice; keep the first.
-    const seen = new Set<string>();
-    products = products.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true))).slice(0, MAX_RESULTS_SHOWN);
-    // Keep Google's relevance order: the client sorts by price when the visitor asks for it.
-  }
-
-  // Curated deals stored by the owner in Supabase ('ofertas_locales') complete thin results.
-  if (supabaseClient && products.length < 3) {
-    try {
-      const { data: dbDeals } = await supabaseClient
-        .from('ofertas_locales')
-        .select('*')
-        .ilike('titulo', `%${query.replace(/[%_]/g, ' ')}%`)
-        .limit(6);
-
-      if (dbDeals && dbDeals.length > 0) {
-        const dbProducts = dbDeals
-          .map((deal: any) => {
-            const price = extractCleanPrice(deal.preco);
-            if (!(price > 0)) return null;
-            const title = cleanProductTitle(deal.titulo || query);
-            const ownUrl = deal.affiliate_url || deal.url_afiliado || deal.link_afiliado || deal.url || '';
-            const storeId = detectStoreId(deal.loja || deal.store || '') || detectStoreId(ownUrl) || 'outras';
-            const offer = makeOffer(`off-db-${deal.id}`, { storeId, storeName: deal.loja || deal.store, price, url: ownUrl || generateStoreProductOfferUrl(storeId, title) });
-            if (ownUrl) {
-              offer.affiliateUrl = ownUrl;
-            }
-            const offers = finalizeOffers([offer], title);
-            const lowest = offers.find((o: any) => o.priceKnown !== false);
-            // With AMAZON_SHOW_PRICES=false a hand-typed Amazon price is hidden too: then there is nothing to list.
-            if (!lowest) return null;
-            return {
-              id: `prod-db-${deal.id}`,
-              title,
-              image: deal.imagem_url || PLACEHOLDER_IMAGE,
-              rating: 0,
-              reviewsCount: 0,
-              offers,
-              lowestOffer: lowest,
-              affiliate_url: ownUrl,
-              // The owner typed this price: show when it was entered, never "just checked".
-              checkedAt: Number.isFinite(new Date(deal.updated_at || deal.created_at || '').getTime())
-                ? new Date(deal.updated_at || deal.created_at).getTime()
-                : undefined,
-              priceHistory: [] as any[]
-            };
-          })
-          .filter(Boolean);
-        const existing = new Set(products.map((p) => p.id));
-        products = [...products, ...dbProducts.filter((p: any) => !existing.has(p.id))];
-      }
-    } catch (err) {
-      console.warn('[Supabase] Error querying ofertas_locales:', err);
+  try {
+    if (mode === 'relevance') {
+      res.json(searchResponse(await relevancePool(query, wantsRefresh), 'relevance', true));
+    } else {
+      res.json(await extraPoolResponse(query, mode, wantsRefresh));
     }
+  } catch (err) {
+    console.warn('[Search] Unexpected error:', err);
+    res.status(500).json({ error: 'Não foi possível buscar agora.' });
   }
-
-  // Only prices the stores really returned count as observations (not the owner's curated prices).
-  recordPrices(products.filter((p) => !String(p.id).startsWith('prod-db-')));
-  attachHistory(products);
-  const { hasSignificantChange, priceDrops } = detectPriceChanges(products);
-
-  if (products.length > 0) {
-    searchCache.set(cacheKey, {
-      data: products,
-      expires: Date.now() + CACHE_TTL_MS,
-      cachedAt: Date.now(),
-      hasSignificantChange
-    });
-    if (searchCache.size > 500) {
-      const oldest = searchCache.keys().next().value;
-      if (oldest !== undefined) searchCache.delete(oldest);
-    }
-  }
-
-  const currentTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
-
-  res.json({
-    products,
-    cached: false,
-    cacheExpiresInSeconds: Math.round(CACHE_TTL_MS / 1000),
-    hasSignificantChange,
-    priceDrops,
-    lastUpdated: `Hoje às ${currentTime}`,
-    retryAttempts: retryCount,
-    errorWarning: products.length === 0 ? (errorNotice || undefined) : undefined
-  });
 });
 
 // Real price history observed by this server for one product.
@@ -1190,6 +1512,10 @@ const LIVE_SEEDS = [
   { seed: 'smartwatch relogio', cat: 'Celulares & Smartphones' }
 ];
 
+// Each seed adds up to this many products to the home (4 seeds, so up to 40). Only results from the six stores with a real
+// price count, so a seed may give fewer. The number of searches (credits) does not depend on this.
+const LIVE_DEALS_PER_SEED = 10;
+
 // Home deals are refreshed about once a day by default because every refresh spends SerpApi credits.
 const LIVE_DEALS_TTL_MS = Math.max(5, parseInt(process.env.LIVE_DEALS_TTL_MINUTES || '1440', 10)) * 60 * 1000;
 let liveDealsCache: { data: any; expires: number; builtAt: number } | null = null;
@@ -1218,18 +1544,29 @@ app.get('/api/live-deals', async (req, res) => {
         const data: any = await r.json();
         const items: any[] = Array.isArray(data.shopping_results) ? data.shopping_results : [];
         // Build first and cut afterwards: a result with no publishable price (Amazon's, or none at all) must not
-        // use up one of the three places of its seed.
-        return items
+        // use up one of the places of its seed.
+        const built = items
           .filter((it) => !IRRELEVANT_OR_USED_REGEX.test(`${it.title || ''} ${it.snippet || ''}`))
           .map((it) => buildProductFromSerp(it, [], cat, seed))
           .filter(Boolean)
-          .slice(0, 3);
+          .slice(0, LIVE_DEALS_PER_SEED);
+        noteGoogleResults(items, built.length);
+        return built;
       })
     );
+    // The seeds are taken in turns (the first of each, then the second of each...) so the first screen of the home
+    // mixes categories instead of showing only the first seed.
+    const perSeed = results.map((r) => (r.status === 'fulfilled' ? (r.value as any[]) : []));
     const seen = new Set<string>();
-    products = results
-      .flatMap((r) => (r.status === 'fulfilled' ? (r.value as any[]) : []))
-      .filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)));
+    for (let i = 0; i < LIVE_DEALS_PER_SEED; i++) {
+      for (const list of perSeed) {
+        const p = list[i];
+        if (p && !seen.has(p.id)) {
+          seen.add(p.id);
+          products.push(p);
+        }
+      }
+    }
   }
 
   // If the refresh failed but older real data exists, keep serving it and say so.
@@ -1252,8 +1589,6 @@ app.get('/api/live-deals', async (req, res) => {
     nextUpdateSeconds: ttlSeconds,
     hasSignificantChange,
     priceDrops,
-    flashDeals: products.slice(0, 8),
-    featuredDeals: products.slice(0, 12),
     allProducts: products,
     errorWarning: products.length > 0 ? undefined : 'Ofertas indisponíveis no momento. Tente novamente em alguns minutos.'
   };
