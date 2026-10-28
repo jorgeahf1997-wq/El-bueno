@@ -10,7 +10,7 @@ import { HighlightsSection } from './components/HighlightsSection';
 import { SpecialCouponsSection } from './components/SpecialCouponsSection';
 import { CouponsSection } from './components/CouponsSection';
 import { AlertsBanner } from './components/AlertsBanner';
-import { SearchResultsView } from './components/SearchResultsView';
+import { SearchResultsView, sortLabel } from './components/SearchResultsView';
 import { ProductCard } from './components/ProductCard';
 import { ProductDetailModal } from './components/ProductDetailModal';
 import { PriceHistoryModal } from './components/PriceHistoryModal';
@@ -25,9 +25,10 @@ import { ApiConfigModal } from './components/ApiConfigModal';
 import { AffiliateNotice } from './components/AffiliateNotice';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import { useTheme } from './hooks/useTheme';
-import type { CouponItem, FilterState, PriceDropEvent, Product, ProductOffer } from './types';
+import type { CouponItem, FilterState, PriceDropEvent, Product, ProductOffer, SortOption } from './types';
 import { buildAffiliateUrl } from './utils/affiliate';
-import { DEFAULT_FILTERS, applyFilters, hasActiveFilters } from './utils/filters';
+import { DEFAULT_FILTERS, applyFilters, countByStore, hasActiveFilters, isExtraPoolSort } from './utils/filters';
+import type { ExtraPoolSort } from './utils/filters';
 import { findTriggered, loadAlerts, removeAlert } from './utils/alerts';
 import type { SavedAlert, TriggeredAlert } from './utils/alerts';
 import { PLACEHOLDER_IMAGE, bestOffer, isCuratedProduct, isUserProduct } from './utils/offers';
@@ -48,9 +49,43 @@ interface Feed {
   notice: string;
   drops: PriceDropEvent[];
   refreshing: boolean;
+  /** false when the order asked for (price, discount) could not be asked to Google, so it covers only the list already found. */
+  sortApplied: boolean;
+  /** Why the order could not be applied, in the server's words. */
+  sortNotice: string;
 }
 
-const EMPTY_FEED: Feed = { phase: 'idle', products: [], updatedText: '', notice: '', drops: [], refreshing: false };
+const EMPTY_FEED: Feed = {
+  phase: 'idle',
+  products: [],
+  updatedText: '',
+  notice: '',
+  drops: [],
+  refreshing: false,
+  sortApplied: true,
+  sortNotice: ''
+};
+
+/** The lists the server can give for one search: the normal one, and the ones Google itself sorted by price or discount. */
+type PoolKey = 'relevance' | ExtraPoolSort;
+
+/**
+ * Which list an order is applied to. Price and discount orders have their own list (asked to Google when first chosen).
+ * Rating and reviews have none on Google's side, so they order the biggest list already found for this search.
+ */
+function poolFor(sort: SortOption, cache: Map<PoolKey, Feed>): PoolKey {
+  if (isExtraPoolSort(sort)) return sort;
+  if (sort === 'relevance') return 'relevance';
+  let best: PoolKey = 'relevance';
+  let size = cache.get('relevance')?.products.length ?? 0;
+  cache.forEach((feed, key) => {
+    if (feed.sortApplied && feed.products.length > size) {
+      best = key;
+      size = feed.products.length;
+    }
+  });
+  return best;
+}
 
 const RECENT_KEY = 'precocerto_recent_searches';
 const CUSTOM_KEY = 'precocerto_custom_products';
@@ -261,6 +296,11 @@ export const App: React.FC = () => {
   const couponsFetchedAt = useRef(0);
   const booted = useRef(false);
   const viewMounted = useRef(false);
+  /** The lists already fetched for the search on screen, so changing the order back and forth costs nothing. */
+  const poolCache = useRef(new Map<PoolKey, Feed>());
+  /** Which of them is on screen. */
+  const shownKey = useRef<PoolKey>('relevance');
+  const filtersRef = useRef<FilterState>(DEFAULT_FILTERS);
 
   /* ----- data ----- */
 
@@ -312,7 +352,9 @@ export const App: React.FC = () => {
           updatedText: asString(body.lastUpdated),
           notice: body.stale === true ? STALE_NOTICE : '',
           drops: asDrops(body.priceDrops),
-          refreshing: false
+          refreshing: false,
+          sortApplied: true,
+          sortNotice: ''
         });
       } else {
         keepOldOrFail();
@@ -329,6 +371,62 @@ export const App: React.FC = () => {
     setRecent(next);
   }, []);
 
+  /** Asks the server for one list of the search (the normal one, or one Google sorted) and puts it on screen. */
+  const fetchPool = useCallback(async (term: string, key: PoolKey, opts: { refresh?: boolean } = {}) => {
+    const refresh = Boolean(opts.refresh);
+    const seq = ++searchSeq.current;
+    setSearch((prev) =>
+      refresh && prev.products.length > 0 ? { ...prev, refreshing: true, notice: '' } : { ...EMPTY_FEED, phase: 'loading' }
+    );
+
+    const fail = (status?: number) => {
+      const notice = status === 429 ? RATE_LIMIT_NOTICE : SEARCH_DOWN_NOTICE;
+      const normal = poolCache.current.get('relevance');
+      if (key !== 'relevance' && normal && normal.products.length > 0) {
+        // The sorted list could not be fetched, but the normal one is here: show it and say it is not the whole order.
+        shownKey.current = 'relevance';
+        setSearch({ ...normal, refreshing: false, sortApplied: false, sortNotice: notice });
+        return;
+      }
+      setSearch((prev) =>
+        prev.products.length > 0 ? { ...prev, refreshing: false, notice } : { ...EMPTY_FEED, phase: 'error', notice }
+      );
+    };
+
+    try {
+      const sortParam = key === 'relevance' ? '' : `&sort=${key}`;
+      const res = await fetch(`/api/search?q=${encodeURIComponent(term)}${sortParam}${refresh ? '&refresh=true' : ''}`);
+      if (seq !== searchSeq.current) return;
+      if (!res.ok) {
+        fail(res.status);
+        return;
+      }
+      const body = asRecord(await res.json());
+      if (seq !== searchSeq.current) return;
+      const list = asProducts(body.products);
+      const feed: Feed = {
+        phase: 'ok',
+        products: list,
+        checkedAt: latestCheck(list),
+        updatedText: asString(body.lastUpdated),
+        notice: list.length === 0 ? asString(body.errorWarning) : asString(body.notice),
+        drops: asDrops(body.priceDrops),
+        refreshing: false,
+        sortApplied: body.sortApplied !== false,
+        sortNotice: asString(body.sortNotice)
+      };
+      // A refreshed list makes the others old: they are fetched again when the visitor picks them. A list the server could
+      // not sort is not kept, so choosing that order again tries again.
+      if (refresh) poolCache.current.clear();
+      if (feed.sortApplied) poolCache.current.set(key, feed);
+      shownKey.current = key;
+      setSearch(feed);
+    } catch {
+      if (seq !== searchSeq.current) return;
+      fail();
+    }
+  }, []);
+
   const runSearch = useCallback(
     async (raw: string, opts: { refresh?: boolean; push?: boolean; categoryId?: string | null } = {}) => {
       const term = cleanTerm(raw);
@@ -337,7 +435,6 @@ export const App: React.FC = () => {
       const push = opts.push !== false;
       const tile = opts.categoryId ? CATEGORY_TILES.find((t) => t.id === opts.categoryId) : undefined;
 
-      const seq = ++searchSeq.current;
       const termChanged = lastTerm.current !== term;
       lastTerm.current = term;
 
@@ -347,54 +444,18 @@ export const App: React.FC = () => {
         setActiveCategoryId(tile ? tile.id : null);
         setSearchInput(tile ? '' : term);
         if (termChanged) setFilters(DEFAULT_FILTERS);
-      }
-      setSearch((prev) =>
-        refresh && prev.products.length > 0
-          ? { ...prev, refreshing: true, notice: '' }
-          : { ...EMPTY_FEED, phase: 'loading' }
-      );
-
-      if (!refresh) {
+        poolCache.current.clear();
         if (push) pushUrl(tile ? categoryPath(tile.id) : searchPath(term));
         updatePageMeta(tile ? categoryMeta(tile.name) : searchMeta(term));
         if (push && !tile) rememberSearch(term);
         scrollToTop();
       }
 
-      const fail = (status?: number) => {
-        const notice = status === 429 ? RATE_LIMIT_NOTICE : SEARCH_DOWN_NOTICE;
-        setSearch((prev) =>
-          prev.products.length > 0
-            ? { ...prev, refreshing: false, notice }
-            : { ...EMPTY_FEED, phase: 'error', notice }
-        );
-      };
-
-      try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(term)}${refresh ? '&refresh=true' : ''}`);
-        if (seq !== searchSeq.current) return;
-        if (!res.ok) {
-          fail(res.status);
-          return;
-        }
-        const body = asRecord(await res.json());
-        if (seq !== searchSeq.current) return;
-        const list = asProducts(body.products);
-        setSearch({
-          phase: 'ok',
-          products: list,
-          checkedAt: latestCheck(list),
-          updatedText: asString(body.lastUpdated),
-          notice: list.length === 0 ? asString(body.errorWarning) : '',
-          drops: asDrops(body.priceDrops),
-          refreshing: false
-        });
-      } catch {
-        if (seq !== searchSeq.current) return;
-        fail();
-      }
+      // A new search starts with the normal list; the same search asked again keeps the order the visitor had chosen.
+      const key: PoolKey = refresh ? shownKey.current : termChanged ? 'relevance' : poolFor(filtersRef.current.sortBy, poolCache.current);
+      await fetchPool(term, key, { refresh });
     },
-    [rememberSearch]
+    [rememberSearch, fetchPool]
   );
 
   /* ----- navigation ----- */
@@ -402,6 +463,8 @@ export const App: React.FC = () => {
   const openHome = useCallback((push = true) => {
     searchSeq.current++; // a search that is still loading no longer matters
     lastTerm.current = '';
+    poolCache.current.clear();
+    shownKey.current = 'relevance';
     setView('home');
     setSearchInput('');
     setActiveTerm('');
@@ -541,14 +604,40 @@ export const App: React.FC = () => {
     [runSearch]
   );
 
-  const handleFilterChange = useCallback((updates: Partial<FilterState>) => {
-    setFilters((prev) => ({ ...prev, ...updates }));
-  }, []);
+  // Picking an order puts the matching list on screen: the one Google sorted (asked to the server the first time), or one that
+  // was already fetched. Changing the order back and forth does not ask the server again.
+  const selectOrder = (sort: SortOption) => {
+    if (!activeTerm) return;
+    const key = poolFor(sort, poolCache.current);
+    const kept = poolCache.current.get(key);
+    if (kept) {
+      searchSeq.current++; // a list that was still loading no longer matters
+      shownKey.current = key;
+      setSearch(kept);
+    } else {
+      void fetchPool(activeTerm, key);
+    }
+  };
 
-  const resetFilters = useCallback(() => setFilters(DEFAULT_FILTERS), []);
+  const handleFilterChange = (updates: Partial<FilterState>) => {
+    setFilters((prev) => ({ ...prev, ...updates }));
+    if (updates.sortBy !== undefined) selectOrder(updates.sortBy);
+  };
+
+  // "Limpar filtros" also brings back the normal order, and with it the normal list.
+  const resetFilters = () => {
+    setFilters(DEFAULT_FILTERS);
+    selectOrder(DEFAULT_FILTERS.sortBy);
+  };
 
   const refreshSearch = () => {
     if (activeTerm) void runSearch(activeTerm, { refresh: true, push: false, categoryId: activeCategoryId });
+  };
+
+  const retrySortedList = () => {
+    if (!activeTerm || !isExtraPoolSort(filters.sortBy)) return;
+    poolCache.current.delete(filters.sortBy);
+    void fetchPool(activeTerm, filters.sortBy);
   };
 
   const addCustomProduct = (product: Product) => {
@@ -588,7 +677,16 @@ export const App: React.FC = () => {
 
   /* ----- derived values ----- */
 
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+
   const visibleResults = useMemo(() => applyFilters(search.products, filters), [search.products, filters]);
+  const storeCounts = useMemo(() => countByStore(search.products, filters), [search.products, filters]);
+  const sortNotice =
+    search.phase === 'ok' && !search.sortApplied && isExtraPoolSort(filters.sortBy)
+      ? { label: sortLabel(filters.sortBy), reason: search.sortNotice }
+      : undefined;
 
   // Alerts are checked against the real prices of the lists already on screen: nothing is fetched in the background.
   const triggered = useMemo(
@@ -738,7 +836,7 @@ export const App: React.FC = () => {
               />
             )}
             <SearchResultsView
-              products={visibleResults}
+              items={visibleResults}
               searchQuery={activeCategory ? activeCategory.name : activeTerm}
               filters={filters}
               onFilterChange={handleFilterChange}
@@ -749,6 +847,10 @@ export const App: React.FC = () => {
               filtersActive={hasActiveFilters(filters)}
               isLoading={search.phase === 'loading'}
               emptyMessage={search.products.length === 0 ? search.notice || undefined : undefined}
+              storeCounts={storeCounts}
+              foundCount={search.products.length}
+              sortNotice={sortNotice}
+              onRetrySort={retrySortedList}
             />
           </>
         )}
