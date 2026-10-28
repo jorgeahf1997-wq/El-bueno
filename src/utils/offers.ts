@@ -1,5 +1,5 @@
-import { Product, ProductOffer } from '../types';
-import { buildAffiliateUrl, trackAffiliateClick } from './affiliate';
+import { Product, ProductOffer, StoreId } from '../types';
+import { buildAffiliateUrl, getDirectStoreSearchUrl, trackAffiliateClick } from './affiliate';
 
 /** Attribute for every outgoing link that earns a commission (Google/CONAR guidance). */
 export const AFFILIATE_REL = 'sponsored noopener noreferrer';
@@ -50,6 +50,10 @@ export function formatChecked(ts?: number): string {
   if (hours < 24) return `há ${hours} h`;
   return `há ${Math.round(hours / 24)} d`;
 }
+
+/** The store's own search page for a term, with the owner's affiliate ID: where to look when the list has nothing from that store. */
+export const storeSearchUrl = (storeId: StoreId, term: string): string =>
+  buildAffiliateUrl(storeId, getDirectStoreSearchUrl(storeId, term));
 
 /** Final URL for an offer (affiliate link when available). '' when there is nothing safe to open. */
 export function resolveOfferUrl(offer: ProductOffer): string {
