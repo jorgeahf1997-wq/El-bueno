@@ -1,10 +1,11 @@
 import React from 'react';
 import { ExternalLink, Star } from 'lucide-react';
-import { Product } from '../types';
+import type { Product, ProductOffer } from '../types';
 import { formatBRL, STORES_METADATA } from '../utils/affiliate';
 import {
   AFFILIATE_REL,
   bestOffer,
+  hasPrice,
   naLoja,
   pricedOffers,
   priceStamp,
@@ -22,11 +23,18 @@ interface ProductCardProps {
   product: Product;
   onOpen: (product: Product) => void;
   variant?: 'grid' | 'compact';
+  /** The offer to show, for example the price of the store the visitor picked. The cheapest offer when omitted. */
+  offer?: ProductOffer;
+  /** Compact card that fills its cell of a grid instead of having a fixed width (home highlights). */
+  fluid?: boolean;
 }
 
-export const ProductCard: React.FC<ProductCardProps> = ({ product, onOpen, variant = 'grid' }) => {
-  const best = bestOffer(product);
-  if (!best) return null;
+export const ProductCard: React.FC<ProductCardProps> = ({ product, onOpen, variant = 'grid', offer, fluid = false }) => {
+  const cheapest = bestOffer(product);
+  const best = offer && hasPrice(offer) ? offer : cheapest;
+  if (!best || !cheapest) return null;
+  // When the visitor looks at one store (or one kind of offer), the card shows that offer. It then says where the product is cheapest.
+  const isCheapest = best.storeId === cheapest.storeId && best.price === cheapest.price;
 
   const storeName = STORES_METADATA[best.storeId]?.name || best.storeName;
   const where = naLoja(storeName);
@@ -36,7 +44,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onOpen, varia
     // The whole card is one click target, but the heading stays a real heading: the button lives inside it
     // and its ::after stretches over the card ("stretched link" pattern).
     return (
-      <article className="relative w-[156px] sm:w-[176px] shrink-0 snap-start bg-surface rounded-2xl border border-slate-200 p-3 hover:border-slate-300 hover:shadow-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand-fg">
+      <article
+        className={`relative bg-surface rounded-2xl border border-slate-200 p-3 hover:border-slate-300 hover:shadow-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand-fg ${
+          fluid ? 'w-full' : 'w-[156px] sm:w-[176px] shrink-0 snap-start'
+        }`}
+      >
         <div className="aspect-square rounded-xl bg-photo flex items-center justify-center overflow-hidden mb-2.5">
           <ProductImage src={product.image} className="w-full h-full object-contain" />
         </div>
@@ -60,7 +72,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onOpen, varia
   }
 
   const href = resolveOfferUrl(best);
-  const savings = savingsVsNext(product);
+  const savings = isCheapest ? savingsVsNext(product) : null;
   const rating = ratingText(product.rating, product.reviewsCount);
   const priced = pricedOffers(product);
   const stamp = priceStamp(product);
@@ -74,7 +86,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onOpen, varia
         </div>
 
         <div className="min-w-0 flex-1">
-          {product.isHistoricalLow && (
+          {product.isHistoricalLow && isCheapest && (
             <span className="inline-block mb-1.5 text-[11px] font-bold bg-save-soft text-save-dark rounded-full px-2.5 py-0.5">
               Menor preço registrado
             </span>
@@ -111,6 +123,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onOpen, varia
             {savings && (
               <p className="text-xs font-semibold text-save-dark mt-1.5">
                 {formatBRL(savings.amount)} mais barato que {naLoja(savings.storeName)}
+              </p>
+            )}
+            {!isCheapest && (
+              <p className="text-xs text-slate-600 mt-1.5">
+                Menor preço entre as lojas: <span className="font-semibold text-slate-800">{formatBRL(cheapest.price)}</span>{' '}
+                {naLoja(STORES_METADATA[cheapest.storeId]?.name || cheapest.storeName)}
               </p>
             )}
           </div>
