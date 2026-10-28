@@ -26,6 +26,19 @@ interface ServerStatus {
   contactEmail: string;
 }
 
+/** What GET /api/search-stats answers: counts only, since the server last started. */
+interface SearchStats {
+  since: number;
+  queries: number;
+  results: number;
+  listed: number;
+  sellers: Record<string, number>;
+  extra: Record<string, { queries: number; results: number; listed: number }>;
+  hiddenAccessories: number;
+  creditsToday: number;
+  dailyBudget: number;
+}
+
 interface ServerTest {
   storeId: string;
   storeName: string;
@@ -46,10 +59,11 @@ const SAMPLE_LINKS: { storeId: StoreId; url: string }[] = [
 // Placeholders only: real keys live in the server's .env and are never typed or shown here.
 const ENV_TEMPLATE = `# .env (raiz do projeto, só no servidor; nunca suba este arquivo para um repositório público)
 SERPAPI_API_KEY=
-SERPAPI_DAILY_BUDGET=30
-SERPAPI_IMMERSIVE_LOOKUPS=3
-LIVE_DEALS_TTL_MINUTES=1440
-SEARCH_CACHE_MINUTES=60
+# Plano grátis do SerpApi: 250 buscas por mês, cerca de 8 por dia
+SERPAPI_DAILY_BUDGET=8
+SERPAPI_IMMERSIVE_LOOKUPS=0
+LIVE_DEALS_TTL_MINUTES=4320
+SEARCH_CACHE_MINUTES=1440
 
 # Opcional: histórico guardado e alertas (veja supabase/schema.sql)
 SUPABASE_URL=
@@ -69,6 +83,26 @@ AFFILIATE_TEMU=2127307378
 AFFILIATE_ALIEXPRESS=JorgeAHF`;
 
 const sectionTitle = 'text-sm font-bold text-slate-900 font-sans tracking-normal';
+
+/** Where the results Google returned come from. The six stores are the ones the site lists. */
+const SELLER_ROWS: { key: string; label: string; listed: boolean }[] = [
+  { key: 'mercadolivre', label: 'Mercado Livre', listed: true },
+  { key: 'amazon', label: 'Amazon', listed: true },
+  { key: 'shopee', label: 'Shopee', listed: true },
+  { key: 'shein', label: 'Shein', listed: true },
+  { key: 'temu', label: 'Temu', listed: true },
+  { key: 'aliexpress', label: 'AliExpress', listed: true },
+  { key: 'magalu', label: 'Magazine Luiza', listed: false },
+  { key: 'outras', label: 'Outras lojas', listed: false }
+];
+
+const EXTRA_ROWS: { key: string; label: string }[] = [
+  { key: 'price_asc', label: 'Menor preço' },
+  { key: 'price_desc', label: 'Maior preço' },
+  { key: 'discount', label: 'Maior desconto' }
+];
+
+const pct = (part: number, total: number) => (total > 0 ? `${Math.round((part / total) * 100)}%` : '–');
 const smallButton =
   'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-surface text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-60';
 
@@ -111,6 +145,8 @@ export const ApiConfigModal: React.FC<ApiConfigModalProps> = ({ onClose }) => {
   const dialogRef = useDialog<HTMLDivElement>(onClose, true);
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [statusError, setStatusError] = useState(false);
+  const [stats, setStats] = useState<SearchStats | null>(null);
+  const [statsError, setStatsError] = useState(false);
   const [tests, setTests] = useState<ServerTest[] | null>(null);
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState(false);
@@ -127,6 +163,14 @@ export const ApiConfigModal: React.FC<ApiConfigModalProps> = ({ onClose }) => {
       })
       .catch(() => {
         if (!cancelled) setStatusError(true);
+      });
+    fetch('/api/search-stats')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('status'))))
+      .then((data) => {
+        if (!cancelled) setStats(data as SearchStats);
+      })
+      .catch(() => {
+        if (!cancelled) setStatsError(true);
       });
     setClicks(getAffiliateClicksHistory().slice(0, 30));
     setOverridden(SAMPLE_LINKS.some(({ storeId }) => getActiveAffiliateTag(storeId) !== DEFAULT_AFFILIATE_TAGS[storeId]));
@@ -231,6 +275,63 @@ export const ApiConfigModal: React.FC<ApiConfigModalProps> = ({ onClose }) => {
                 {copied === 'env' ? 'Copiado' : 'Copiar modelo do .env'}
               </button>
             </div>
+          </section>
+
+          {/* 1b. What Google returned, by store */}
+          <section aria-labelledby="dono-google">
+            <h3 id="dono-google" className={sectionTitle}>
+              Resultados do Google por loja
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Só as 6 lojas aparecem no site. Os resultados de outras lojas são descartados. Contagem desde que o servidor ligou
+              (volta a zero quando ele reinicia).
+            </p>
+            {statsError && (
+              <p role="alert" className="mt-2 text-xs rounded-lg bg-warn-soft border border-warn-line text-warn-ink px-3 py-2">
+                Não foi possível ler as estatísticas.
+              </p>
+            )}
+            {stats && (
+              <div data-testid="owner-stats">
+                <p className="mt-3 text-sm text-slate-800">
+                  Créditos de busca hoje: <strong>{stats.creditsToday}</strong> de {stats.dailyBudget}
+                </p>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  {stats.queries} {stats.queries === 1 ? 'busca' : 'buscas'} ao Google · {stats.results} resultados recebidos ·{' '}
+                  {stats.listed} produtos listados · {stats.hiddenAccessories} acessórios ocultos (capas, cabos…)
+                </p>
+                <ul className="mt-3 rounded-xl border border-slate-200 divide-y divide-slate-100" aria-label="Resultados por loja">
+                  {SELLER_ROWS.map((row) => {
+                    const n = stats.sellers[row.key] || 0;
+                    return (
+                      <li key={row.key} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                        <span className="text-slate-800">
+                          {row.label}
+                          {!row.listed && <span className="text-xs text-slate-500"> (não listada)</span>}
+                        </span>
+                        <span className="text-xs text-slate-600">
+                          <strong className="text-slate-900">{n}</strong> · {pct(n, stats.results)}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <h4 className="mt-4 text-xs font-bold text-slate-700">Listas ordenadas pelo Google (1 crédito cada)</h4>
+                <ul className="mt-1 rounded-xl border border-slate-200 divide-y divide-slate-100" aria-label="Listas ordenadas">
+                  {EXTRA_ROWS.map((row) => {
+                    const e = stats.extra[row.key];
+                    return (
+                      <li key={row.key} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                        <span className="text-slate-800">{row.label}</span>
+                        <span className="text-xs text-slate-600">
+                          {e ? `${e.queries} ${e.queries === 1 ? 'busca' : 'buscas'} · ${e.results} resultados · ${e.listed} listados` : 'ainda não pedida'}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
           </section>
 
           {/* 2. Affiliate links */}
