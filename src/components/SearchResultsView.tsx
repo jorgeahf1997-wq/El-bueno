@@ -1,12 +1,28 @@
 import React from 'react';
-import { SlidersHorizontal, Truck, Flag, X } from 'lucide-react';
-import { Product, FilterState, SortOption, StoreId } from '../types';
+import { SlidersHorizontal, Truck, Flag, X, ExternalLink } from 'lucide-react';
+import { FilterState, Product, SortOption, StoreId } from '../types';
+import { usePaging } from '../hooks/usePaging';
+import { COMPARED_STORE_IDS } from '../utils/filters';
+import type { Listed } from '../utils/filters';
 import { STORES_METADATA } from '../utils/affiliate';
+import { AFFILIATE_REL, naLoja, storeSearchUrl } from '../utils/offers';
 import { AffiliateNotice } from './AffiliateNotice';
 import { ProductCard } from './ProductCard';
 
+/** Cards shown at first, and each time "Ver mais ofertas" is pressed. */
+export const SEARCH_PAGE = 12;
+
+/** Shown when the order the visitor asked for could not be asked to Google (no credits, Google down). */
+export interface SortNotice {
+  /** The order, as the visitor reads it ("Menor preço"). */
+  label: string;
+  /** Why, in the server's words (may be empty). */
+  reason: string;
+}
+
 interface SearchResultsViewProps {
-  products: Product[];
+  /** The products to show, already filtered and sorted, each with the offer that represents it. */
+  items: Listed[];
   searchQuery: string;
   filters: FilterState;
   onFilterChange: (updates: Partial<FilterState>) => void;
@@ -20,6 +36,13 @@ interface SearchResultsViewProps {
   isLoading?: boolean;
   /** Shown when there are no results (for example "live search unavailable"). */
   emptyMessage?: string;
+  /** How many products each store would show (see countByStore). */
+  storeCounts?: Partial<Record<StoreId, number>>;
+  /** Products found before the filters were applied. */
+  foundCount?: number;
+  /** Set when the chosen price or discount order covers only what was already found. */
+  sortNotice?: SortNotice;
+  onRetrySort?: () => void;
 }
 
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
@@ -31,7 +54,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
   { value: 'sales', label: 'Mais avaliações' }
 ];
 
-const STORE_OPTIONS: StoreId[] = ['mercadolivre', 'amazon', 'shopee', 'shein', 'temu', 'aliexpress'];
+export const sortLabel = (sort: SortOption): string => SORT_OPTIONS.find((o) => o.value === sort)?.label || '';
 
 const chipClass = (active: boolean) =>
   `inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border text-xs font-semibold shrink-0 transition-colors ${
@@ -44,7 +67,7 @@ const selectClass =
   'px-3 py-2 rounded-full border border-slate-300 bg-surface text-xs font-semibold text-slate-800 focus:outline-none focus:border-brand';
 
 export const SearchResultsView: React.FC<SearchResultsViewProps> = ({
-  products,
+  items,
   searchQuery,
   filters,
   onFilterChange,
@@ -54,9 +77,21 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({
   onResetFilters,
   filtersActive = false,
   isLoading,
-  emptyMessage
+  emptyMessage,
+  storeCounts,
+  foundCount,
+  sortNotice,
+  onRetrySort
 }) => {
+  const paging = usePaging(items, SEARCH_PAGE);
   const blockedByFilters = filtersActive && Boolean(onResetFilters);
+  const storeChosen = filters.store !== 'all';
+  const storeMeta = storeChosen ? STORES_METADATA[filters.store as StoreId] : undefined;
+  // Only the store filter is in the way: the visitor can look for the product in that store itself.
+  const onlyStoreInTheWay =
+    storeChosen && !filters.freteGratisOnly && !filters.nationalOnly && !filters.minPrice && !filters.maxPrice;
+  const storeHref = storeChosen && searchQuery ? storeSearchUrl(filters.store as StoreId, searchQuery) : '';
+  const ownOrder = filters.sortBy === 'rating' || filters.sortBy === 'sales';
 
   return (
     <div className="w-full pb-8">
@@ -72,8 +107,11 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({
             )}
           </h1>
           {!isLoading && (
-            <p className="text-xs text-slate-500 mt-0.5" aria-live="polite">
-              {products.length} {products.length === 1 ? 'produto' : 'produtos'}
+            <p className="text-xs text-slate-500 mt-0.5" aria-live="polite" data-testid="result-count">
+              {paging.hasMore
+                ? `Mostrando ${paging.visible.length} de ${paging.total} produtos`
+                : `${paging.total} ${paging.total === 1 ? 'produto' : 'produtos'}`}
+              {filtersActive && typeof foundCount === 'number' && foundCount > paging.total ? ` (de ${foundCount} encontrados)` : ''}
             </p>
           )}
         </div>
@@ -118,9 +156,10 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({
             className={selectClass}
           >
             <option value="all">Todas as lojas</option>
-            {STORE_OPTIONS.map((s) => (
+            {COMPARED_STORE_IDS.map((s) => (
               <option key={s} value={s}>
                 {STORES_METADATA[s].name}
+                {storeCounts && typeof storeCounts[s] === 'number' ? ` (${storeCounts[s]})` : ''}
               </option>
             ))}
           </select>
@@ -147,6 +186,32 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({
         </button>
       </div>
 
+      {ownOrder && !isLoading && (
+        <p className="text-[11px] text-slate-500 mb-3" data-testid="own-order-note">
+          “{sortLabel(filters.sortBy)}” ordena os produtos que encontramos nesta busca: o Google não tem uma lista ordenada por avaliações.
+        </p>
+      )}
+
+      {sortNotice && !isLoading && (
+        <div
+          role="status"
+          data-testid="sort-notice"
+          className="mb-3 rounded-xl bg-warn-soft border border-warn-line text-warn-ink px-3.5 py-3 text-xs"
+        >
+          <p className="font-bold">Ordenação parcial</p>
+          <p className="mt-0.5">
+            Não conseguimos pedir ao Google a lista completa ordenada por “{sortNotice.label}” agora. Estes produtos estão
+            ordenados só entre os que já tínhamos encontrado nesta busca.
+            {sortNotice.reason ? ` (${sortNotice.reason})` : ''}
+          </p>
+          {onRetrySort && (
+            <button type="button" onClick={onRetrySort} className="mt-1.5 font-bold underline underline-offset-2">
+              Tentar de novo
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="mb-4">
         <AffiliateNotice />
       </div>
@@ -170,19 +235,46 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({
         </div>
       )}
 
-      {!isLoading && products.length === 0 && (
-        <div className="bg-surface rounded-2xl p-8 text-center border border-slate-200">
+      {!isLoading && items.length === 0 && (
+        <div className="bg-surface rounded-2xl p-8 text-center border border-slate-200" data-testid="empty-results">
           <h3 className="text-base font-bold text-slate-900 mb-1 font-sans tracking-normal">
-            {blockedByFilters ? 'Nenhum produto com esses filtros' : 'Nenhum produto encontrado'}
+            {onlyStoreInTheWay && storeMeta
+              ? `Não encontramos esta busca ${naLoja(storeMeta.name)}`
+              : blockedByFilters
+                ? 'Nenhum produto com esses filtros'
+                : 'Nenhum produto encontrado'}
           </h3>
           <p className="text-sm text-slate-600 max-w-sm mx-auto mb-4">
             {emptyMessage ||
-              (blockedByFilters
-                ? 'Remova algum filtro para ver mais resultados.'
-                : 'Tente um termo mais geral, como “fone”, “air fryer” ou “smartwatch”.')}
+              (onlyStoreInTheWay && storeMeta
+                ? `Entre os produtos desta busca, nenhum tem preço ${naLoja(storeMeta.name)}. Você pode procurar direto na loja ou ver todas as lojas.`
+                : blockedByFilters
+                  ? 'Remova algum filtro para ver mais resultados.'
+                  : 'Tente um termo mais geral, como “fone”, “air fryer” ou “smartwatch”.')}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-2">
-            {blockedByFilters && (
+            {onlyStoreInTheWay && storeMeta && storeHref && (
+              <a
+                href={storeHref}
+                target="_blank"
+                rel={AFFILIATE_REL}
+                data-testid="store-search-link"
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-brand text-white text-sm font-bold hover:bg-brand-dark"
+              >
+                Buscar “{searchQuery}” {naLoja(storeMeta.name)}
+                <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+              </a>
+            )}
+            {onlyStoreInTheWay && (
+              <button
+                type="button"
+                onClick={() => onFilterChange({ store: 'all' })}
+                className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-sm font-bold hover:bg-slate-50"
+              >
+                Ver todas as lojas
+              </button>
+            )}
+            {blockedByFilters && !onlyStoreInTheWay && (
               <button
                 type="button"
                 onClick={onResetFilters}
@@ -206,12 +298,26 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({
         </div>
       )}
 
-      {!isLoading && products.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {products.map((p) => (
-            <ProductCard key={p.id} product={p} onOpen={onOpenProductDetails} />
-          ))}
-        </div>
+      {!isLoading && items.length > 0 && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="results-grid">
+            {paging.visible.map(({ product, offer }) => (
+              <ProductCard key={product.id} product={product} offer={offer} onOpen={onOpenProductDetails} />
+            ))}
+          </div>
+          {paging.hasMore && (
+            <div className="mt-5 flex justify-center">
+              <button
+                type="button"
+                onClick={paging.showMore}
+                data-testid="show-more"
+                className="px-6 py-3 rounded-xl border border-slate-300 bg-surface text-sm font-bold text-slate-800 hover:bg-slate-50"
+              >
+                Ver mais ofertas ({paging.remaining})
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
