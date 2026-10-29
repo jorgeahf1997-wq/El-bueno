@@ -21,12 +21,13 @@ services:
         value: production
       - key: SERPAPI_API_KEY
         sync: false
-      # Segunda clave de SerpApi (opcional): añade SERPAPI_API_KEY_2 después en Render > Environment.
       - key: SERPAPI_DAILY_BUDGET
-        value: "30"
+        value: "8"
       - key: SERPAPI_IMMERSIVE_LOOKUPS
-        value: "3"
-      - key: LIVE_DEALS_TTL_MINUTES
+        value: "0"
+      - key: SEARCH_CACHE_MINUTES
         value: "1440"
+      - key: LIVE_DEALS_TTL_MINUTES
+        value: "4320"
       - key: WHATSAPP_ALERTS_ENABLED
         value: "false"

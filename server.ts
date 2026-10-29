@@ -62,7 +62,7 @@ if (SUPABASE_URL && (SUPABASE_SERVICE_KEY || SUPABASE_ANON_KEY) && SUPABASE_URL.
 // SERPAPI CONFIG. Every uncached search spends SerpApi credits, so results are cached
 // and the UI always shows the real time each price was checked ("checkedAt").
 // -------------------------------------------------------------
-export const CACHE_TTL_MS = Math.max(5, parseInt(process.env.SEARCH_CACHE_MINUTES || '60', 10)) * 60 * 1000;
+export const CACHE_TTL_MS = Math.max(5, parseInt(process.env.SEARCH_CACHE_MINUTES || '1440', 10)) * 60 * 1000;
 
 interface CacheEntry<T> {
   data: T;
@@ -814,10 +814,10 @@ function attachHistory(products: any[]) {
 // -------------------------------------------------------------
 // SerpApi credit budget & request rate limiting (protects the API quota)
 // -------------------------------------------------------------
-// Defaults suit a plan of ~1,000 searches/month. Set SERPAPI_DAILY_BUDGET = monthly credits / 30 for your plan.
-const SERPAPI_DAILY_BUDGET = Math.max(0, parseInt(process.env.SERPAPI_DAILY_BUDGET || '30', 10));
+// Defaults suit a free plan of ~250 searches/month (~8/day). Set SERPAPI_DAILY_BUDGET = monthly credits / 30 for your plan.
+const SERPAPI_DAILY_BUDGET = Math.max(0, parseInt(process.env.SERPAPI_DAILY_BUDGET || '8', 10));
 // Each "immersive" lookup (extra stores for one product) costs 1 more credit. 0 disables them.
-const SERPAPI_IMMERSIVE_LOOKUPS = Math.min(8, Math.max(0, parseInt(process.env.SERPAPI_IMMERSIVE_LOOKUPS || '3', 10)));
+const SERPAPI_IMMERSIVE_LOOKUPS = Math.min(8, Math.max(0, parseInt(process.env.SERPAPI_IMMERSIVE_LOOKUPS || '0', 10)));
 let serpSpend = { day: '', used: 0 };
 function spendSerp(credits: number): boolean {
   const day = new Date().toISOString().slice(0, 10);
@@ -1516,8 +1516,8 @@ const LIVE_SEEDS = [
 // price count, so a seed may give fewer. The number of searches (credits) does not depend on this.
 const LIVE_DEALS_PER_SEED = 10;
 
-// Home deals are refreshed about once a day by default because every refresh spends SerpApi credits.
-const LIVE_DEALS_TTL_MS = Math.max(5, parseInt(process.env.LIVE_DEALS_TTL_MINUTES || '1440', 10)) * 60 * 1000;
+// Home deals are refreshed about once every 3 days by default (4320 minutes) because every refresh spends SerpApi credits.
+const LIVE_DEALS_TTL_MS = Math.max(5, parseInt(process.env.LIVE_DEALS_TTL_MINUTES || '4320', 10)) * 60 * 1000;
 let liveDealsCache: { data: any; expires: number; builtAt: number } | null = null;
 
 app.get('/api/live-deals', async (req, res) => {
